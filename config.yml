@@ -1,0 +1,4 @@
+mspec_path: wrd_mspecs
+wavs_path: wrd_wavs
+forms2meanings_map: forms2meanings.json
+verbose: True
