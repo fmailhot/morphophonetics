@@ -17,6 +17,15 @@ import torch
 import torchaudio.functional as F
 
 
+N_MELS = 80
+N_FFT = 1024
+HOP_LEN = 256
+WIN_LEN = 1024
+BVG_SR = 22050
+F_MIN = 0.0
+F_MAX = 8000.0
+
+
 def dynamic_range_compression_torch(S, C=1, clip_val=1e-5):
     """ Compress dynamic range of magnitude spectrogram."""
     return torch.log(torch.clamp(S, min=clip_val) * C)
@@ -38,9 +47,9 @@ def mel_spectrogram(y, n_fft: int = 1024, num_mels: int = 80,
     # resample to required rate; no-op if rates match
     y_resamp = F.resample(y, samp_rate, BIGVGAN_SR)
 
-    if torch.min(y) < -1.:
+    if torch.min(y_resamp) < -1.:
         print('min value is ', torch.min(y))
-    if torch.max(y) > 1.:
+    if torch.max(y_resamp) > 1.:
         print('max value is ', torch.max(y))
     
     mel_basis = {}
@@ -49,21 +58,21 @@ def mel_spectrogram(y, n_fft: int = 1024, num_mels: int = 80,
     if fmax not in mel_basis:
         mel = librosa_mel_fn(sr=samp_rate, n_fft=n_fft,
                              n_mels=num_mels, fmin=fmin, fmax=fmax)
-        mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+        mel_basis[str(fmax)+'_'+str(y_resamp.device)] = torch.from_numpy(mel).float().to(y_resamp.device)
+        hann_window[str(y_resamp.device)] = torch.hann_window(win_size).to(y_resamp.device)
 
-    y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
-    y = y.squeeze(1)
+    y_pad = torch.nn.functional.pad(y_resamp.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
+    y_pad = y_pad.squeeze(1)
 
     # complex tensor as default, then use view_as_real for future pytorch compatibility
-    spec = torch.stft(input=y, n_fft=n_fft, hop_length=hop_size, win_length=win_size,
-                      window=hann_window[str(y.device)],
+    spec = torch.stft(input=y_pad, n_fft=n_fft, hop_length=hop_size, win_length=win_size,
+                      window=hann_window[str(y_pad.device)],
                       center=center, pad_mode='reflect',
                       normalized=False, onesided=True, return_complex=True)
     spec = torch.view_as_real(spec)
     spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
 
-    spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)
+    spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y_pad.device)], spec)
     spec = dynamic_range_compression_torch(spec)
 
     return spec

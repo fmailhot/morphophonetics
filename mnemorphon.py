@@ -28,7 +28,7 @@ from tqdm import tqdm
 import yaml
 import zeyrek
 # local imports
-from utils import orthographize, powerset
+from data_proc import orthographize, powerset
 
 
 NO_CONF_ERR_MSG = ('!!! No config found; adjust conf path or '
@@ -109,7 +109,7 @@ class Mnemorphon:
                 self.lexicon.append(LexicalEntry(tok, morphs, orth, lemma))
                 self.lemmas2tokens[lemma].add(tok)
                 for morphset in powerset(morphs):
-                    self.morphs2tokens[tuple(sorted(morphset))].add(tok)
+                    self.morphs2tokens[frozenset(morphset)].add(tok)
                 # N.B. skipping index over orthographic form for now
         logging.info('%d entries in self.lexicon', len(self.lexicon))
         # disable until we're interested in looking at word-level
@@ -165,29 +165,25 @@ class Mnemorphon:
         # - (stretch) maintain dict of IDs2meanf0
         # - (stretch) mapping by acoustic distance to some threshold
         lemma_related_toks = self.lemmas2tokens[lemma]
-        morph_related_toks = self.morphs2tokens[morph_feats]
+        morph_related_toks = self.morphs2tokens[frozenset(morph_feats)]
         if strict:
             # known word: take only tokens with same lemma and same morph_feats
-            related_toks = lemma_related_toks & morph_related_toks
+            related_toks = sorted(lemma_related_toks & morph_related_toks)
         else:
-            # take everything with same lemma and subset of morph_feats (upweight these!)
-            submorph_toks = set()
-            for morphset in sorted(powerset(morph_feats), key=lambda x:len(x), reverse=True):
-                if morphset:
-                    # skip empty subset
-                    submorph_toks |= lemma_related_toks & self.morphs2tokens[morphset]
-            # AND everything with same morph_feats
-            related_toks = submorph_toks | morph_related_toks
+            # take everything with same lemma or morph_feats (upweight these!)
+            #TODO(@phoneme): "back-off" to subsets if full morph_feats not known
+            #TODO(@phoneme): restrict to "p-close" tokens?
+            related_toks = sorted(lemma_related_toks) + sorted(morph_related_toks)
         return sorted(related_toks)
 
     def get_token_spec(self, token: str, numpy=False):
         # squeeze() to get rid of batch dimension, transpose for tslearn compatibility
-        mspec = torch.load(f'{self.mspec_path}/{token}.pt').squeeze().t()
+        mspec = torch.load(f'{token}').squeeze().t()
         return mspec.numpy() if numpy else mspec
     
     def lex_ent_is_known(self, lemma, morph_feats):
         """ Do I have tokens matching the lemma and exact morphosyntactic features? """
-        return (self.lemmas2tokens[lemma] & self.morphs2tokens[morph_feats] != set())
+        return (self.lemmas2tokens[lemma] & self.morphs2tokens[frozenset(morph_feats)] != set())
 
     def produce(self, lemma: str, morph_feats: tuple, context: dict = {}, N: int = 0, numpy: bool = True):
         """ Produce output spectrogram for given input lexical item.
@@ -212,13 +208,17 @@ class Mnemorphon:
 
         # build (possibly downsampled) cloud of token IDs and melspecs
         known_lex_ent = self.lex_ent_is_known(lemma, morph_feats)
+        if self.verbose:
+            logging.info(f'!! MNEM !! --> lex_ent {lemma}:{morph_feats}is {"" if known_lex_ent else "UN"}known')
         tokens = self.get_tokens(lemma, morph_feats, strict=known_lex_ent, context=context)
         tokens = sample(tokens, N) if N > 0 else tokens
         cloud = [self.get_token_spec(tok, numpy) for tok in tokens]
+        if self.verbose:
+            logging.info(f'!! MNEM !! --> cloud size: {len(cloud)}')
         # for unknown word, this could sample from maximal lemma+morphs match
         seed_token = sample(tokens, 1)[0]
         dba_mm = self.compute_DBA(seed_token, cloud)
-        return dba_mm
+        return dba_mm, seed_token
 
     def perceive(self, form, meaning=None):
         # A form (and optional meaning) is perceived as follows:

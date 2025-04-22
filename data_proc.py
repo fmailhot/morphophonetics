@@ -233,9 +233,9 @@ def compute_token_spectrograms(wavs_dir: str = None, spec_dir: str = None,
         try:
             # ipdb.set_trace()
             # load audio
-            y, _ = torchaudio.load(f_wav, normalize=True)
+            y, sr = torchaudio.load(f_wav, normalize=True)
             # compute & save spectrogram
-            y_melspec = mel_spectrogram(y)
+            y_melspec = mel_spectrogram(y, samp_rate=sr)
             tok_name, _ = os.path.splitext(os.path.basename(f_wav))
             phon_form = tok_name.split('_')[0]
             orth_form = orthographize(phon_form)
